@@ -68,17 +68,6 @@ def run_analysis_pcap(in_file):
       # network_layer_header_size = dpkt.ip.IP_HDR_LEN
       packet_data_size = len(tcp.data)
       
-      # compute window size -> handle cases
-      # if syn ack packet (contains negotiated window scaling)
-      if (bool(ip.data.flags & dpkt.tcp.TH_SYN) and bool(ip.data.flags & dpkt.tcp.TH_ACK) and dpkt.tcp.TCP_OPT_WSCALE in tcp.opts):
-        # print("window scale factor detected...")
-        # print(packet_info['window_size'] * (2 ** tcp.opts[dpkt.tcp.TCP_OPT_WSCALE]))
-        for op,op_data in dpkt.tcp.parse_opts(tcp.opts):
-          if op == dpkt.tcp.TCP_OPT_WSCALE:
-            # print("detected",int.from_bytes(op_data,byteorder="big"))
-            print(2 ** int.from_bytes(op_data,byteorder="big"))
-        packet_info['window_size'] = None
-
       # summarize packet information
       packet_info = {
         "packet_num": packet_number,
@@ -94,27 +83,62 @@ def run_analysis_pcap(in_file):
           "syn_set": bool(ip.data.flags & dpkt.tcp.TH_SYN),
           "fin_set": bool(ip.data.flags & dpkt.tcp.TH_FIN)
         },
-        "window_size": tcp.win,
+        "window_size": tcp.win, # window
         "payload_size": packet_data_size,
         "packet_direction": packet_direction,
         "options": {}
       }
 
-
-        # print(tcp.opts[dpkt.tcp.TCP_OPT_WSCALE]) 
-      
       # add packet info to corresponding tcpflow
 
       # check for sender initiated tcp flow
       sender_initiated = (source_ip == sender_ip_addr)
       if sender_initiated and packet_direction == SENDER_TO_RECEIVER and packet_info['flags']['syn_set']:
         if (tcp_endpoint not in tcp_flows):
-          tcp_flows[tcp_endpoint] = [] # add new flow
+          tcp_flows[tcp_endpoint] = {
+            "meta_data": {
+              "sender_to_receiver_window_scale": None, # store window scale option from tcp handshake
+              "receiver_to_sender_window_scale": None,
+            },
+            "packets": []
+          } # add new flow
       
-      tcp_flows[tcp_endpoint].append(packet_info)
+      tcp_flows[tcp_endpoint]['packets'].append(packet_info)
+
+      # update meta data with window scale
+      if packet_info['flags']['syn_set']:
+        window_scale = None
+        # print("Packet ",str(packet_number), " window scale option detected? ", dpkt.tcp.TCP_OPT_WSCALE in dict(dpkt.tcp.parse_opts(tcp.opts)))
+        if (dpkt.tcp.TCP_OPT_WSCALE in dict(dpkt.tcp.parse_opts(tcp.opts))):  
+          # print("detected..")
+          ws = dict(dpkt.tcp.parse_opts(tcp.opts))[dpkt.tcp.TCP_OPT_WSCALE]
+          window_scale = int.from_bytes(ws,byteorder='big')
+
+        if packet_info['flags']['ack_set']: # syn ack -> update receiver to sender window scale
+          tcp_flows[tcp_endpoint]['meta_data']['receiver_to_sender_window_scale'] = window_scale
+        else: # # syn only -> update update sender to receiver window scale 
+          tcp_flows[tcp_endpoint]['meta_data']['sender_to_receiver_window_scale'] = window_scale
 
     # end pcap packet iteration
+    
+    total_num_packets = 0
+    for unique_flow,content in tcp_flows.items():
+      print("The flow is ",unique_flow)
+      i = 0
+      print("Meta Data")
+      print(content['meta_data'])
+      print('\n')
+      print("some packets here are ")
+      # i = 0
+      for p in content['packets']:
+        # if i ==15:
+        #   break 
+        # i+=1 
+        total_num_packets+=1
 
+
+
+'''
   # Display
   print("\nTotal Number of TCP Flows: ", len(tcp_flows),"\n")
   print("------------------------------------------------------------------------------------")
@@ -131,7 +155,6 @@ def run_analysis_pcap(in_file):
     syn_ack_packet = None 
     ack_packet = None 
     num_transactions_after_setup = 0
-    calculated_window_size = 0 # adjust packet data
     print("After TCP Handshake... Sender packets are as follows")
     for p in packets:
       # skip until tcp connection setup successful
@@ -161,6 +184,7 @@ def run_analysis_pcap(in_file):
     if (syn_packet is None or syn_ack_packet is None or ack_packet is None):
       print("An error occured detecting tcp handshake")
     print("\n------------------------------------------------------------------------------------\n")
+'''
 
 if __name__ == "__main__":
   run_analysis_pcap(r'assignment2.pcap')
