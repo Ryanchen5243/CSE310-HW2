@@ -4,8 +4,7 @@ import socket
 import struct
 
 def run_analysis_pcap(in_file):
-  # count_syn, count_ack, count_other_packet,total_packets  = 0, 0, 0, 0
-  tcp_flows = {}
+  tcp_flows = {} # stores all (sender-initiated) tcp flows
   sender_ip_addr = "130.245.145.12"
   receiver_ip_addr = "128.208.2.198"
 
@@ -61,10 +60,6 @@ def run_analysis_pcap(in_file):
       # print("Source IP: ", source_ip, " Dest IP: ", dest_ip)
       # print("TCP Endpoint: ", tcp_endpoint)
       # print("Packet Direction: ",packet_direction)
-      
-      # add new flow candidate to result
-      if tcp_endpoint not in tcp_flows:
-        tcp_flows[tcp_endpoint] = []
 
       # ip payload = tcp
       tcp = ip.data
@@ -73,6 +68,17 @@ def run_analysis_pcap(in_file):
       # network_layer_header_size = dpkt.ip.IP_HDR_LEN
       packet_data_size = len(tcp.data)
       
+      # compute window size -> handle cases
+      # if syn ack packet (contains negotiated window scaling)
+      if (bool(ip.data.flags & dpkt.tcp.TH_SYN) and bool(ip.data.flags & dpkt.tcp.TH_ACK) and dpkt.tcp.TCP_OPT_WSCALE in tcp.opts):
+        # print("window scale factor detected...")
+        # print(packet_info['window_size'] * (2 ** tcp.opts[dpkt.tcp.TCP_OPT_WSCALE]))
+        for op,op_data in dpkt.tcp.parse_opts(tcp.opts):
+          if op == dpkt.tcp.TCP_OPT_WSCALE:
+            # print("detected",int.from_bytes(op_data,byteorder="big"))
+            print(2 ** int.from_bytes(op_data,byteorder="big"))
+        packet_info['window_size'] = None
+
       # summarize packet information
       packet_info = {
         "packet_num": packet_number,
@@ -88,23 +94,73 @@ def run_analysis_pcap(in_file):
           "syn_set": bool(ip.data.flags & dpkt.tcp.TH_SYN),
           "fin_set": bool(ip.data.flags & dpkt.tcp.TH_FIN)
         },
-        "window_size": ip.data.win,
+        "window_size": tcp.win,
         "payload_size": packet_data_size,
-        "packet_direction": packet_direction
+        "packet_direction": packet_direction,
+        "options": {}
       }
+
+
+        # print(tcp.opts[dpkt.tcp.TCP_OPT_WSCALE]) 
       
       # add packet info to corresponding tcpflow
+
+      # check for sender initiated tcp flow
+      sender_initiated = (source_ip == sender_ip_addr)
+      if sender_initiated and packet_direction == SENDER_TO_RECEIVER and packet_info['flags']['syn_set']:
+        if (tcp_endpoint not in tcp_flows):
+          tcp_flows[tcp_endpoint] = [] # add new flow
+      
       tcp_flows[tcp_endpoint].append(packet_info)
+
     # end pcap packet iteration
 
-    # Display
-    for tcp_flow,packets in tcp_flows.items():
-      print("TCP Flow: ")
-      first_packet_in_flow = packets[0]
-      print("Source IP Address: {}\nSource Port: {}\nDestination IP Address: {}\nDestination Port: {}".format(
-        first_packet_in_flow['src_ip'], first_packet_in_flow['src_port'], first_packet_in_flow['dst_ip'],first_packet_in_flow['dst_port']
+  # Display
+  print("\nTotal Number of TCP Flows: ", len(tcp_flows),"\n")
+  print("------------------------------------------------------------------------------------")
+  for tcp_flow,packets in tcp_flows.items():
+    print("TCP Flow: ")
+    # Display (source port, source IP address, destination port, destination IP address)
+    first_packet_in_flow = packets[0]
+    print("Source IP Address: {}\nSource Port: {}\nDestination IP Address: {}\nDestination Port: {}".format(
+      first_packet_in_flow['src_ip'], first_packet_in_flow['src_port'], first_packet_in_flow['dst_ip'],first_packet_in_flow['dst_port']
+    ))
+    print()
+    # first two transactions after connection setup, sequence number, ack number, and receive window size
+    syn_packet = None 
+    syn_ack_packet = None 
+    ack_packet = None 
+    num_transactions_after_setup = 0
+    calculated_window_size = 0 # adjust packet data
+    print("After TCP Handshake... Sender packets are as follows")
+    for p in packets:
+      # skip until tcp connection setup successful
+      if syn_packet is None or syn_ack_packet is None or ack_packet is None:
+        if p['flags']['syn_set'] and p['flags']['ack_set']:
+          syn_ack_packet = p 
+        elif p['flags']['syn_set']:
+          syn_packet = p 
+        elif p['flags']['ack_set']:
+          ack_packet = p
+          # check for piggy backed data
+          if (p['payload_size'] > 0):
+            print("Packet No: {}\nSequence number: {} Ack number: {} Receive Window size: {}".format(
+              p['packet_num'], p['seq_num'], p['ack_num'], p['window_size']
+            ))
+            num_transactions_after_setup += 1
+        continue
+      # tcp connection setup successful
+      # Sequence number, Ack number, and Receive Window size.
+      if num_transactions_after_setup == 2:
+        break
+      print("Packet No: {}\nSequence number: {} Ack number: {} Receive Window size: {}".format(
+        p['packet_num'], p['seq_num'], p['ack_num'], p['window_size']
       ))
-      print()
+      num_transactions_after_setup += 1
+
+    if (syn_packet is None or syn_ack_packet is None or ack_packet is None):
+      print("An error occured detecting tcp handshake")
+    print("\n------------------------------------------------------------------------------------\n")
 
 if __name__ == "__main__":
   run_analysis_pcap(r'assignment2.pcap')
