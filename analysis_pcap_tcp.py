@@ -210,7 +210,11 @@ def run_analysis_pcap(in_file):
     
     diff_time = (sender_end_time - sender_start_time).total_seconds()
     # print("The time difference is ",diff_time)
-    flow_level_information[unique_flow]['throughput'] = sender_tcp_bytes_total / diff_time
+    flow_level_information[unique_flow]['throughput_info'] = {
+      "time_elapsed": diff_time,
+      "total_num_bytes": sender_tcp_bytes_total,  
+      "sender_throughput": sender_tcp_bytes_total / diff_time
+    }
 
   print("=======================================================================")
   for flow_key, flow_contents in flow_level_information.items():
@@ -219,8 +223,10 @@ def run_analysis_pcap(in_file):
     for t in flow_contents['two_trans']:
       print(t)
     print()
-    print("Sender Throughput:",end=" ")
-    print(flow_contents['throughput'], "bytes/second")
+    
+    print("Time Elapsed: ", flow_contents['throughput_info']['time_elapsed'], " seconds")
+    print("Total Num Bytes: ", flow_contents['throughput_info']['total_num_bytes'], " bytes")
+    print("Sender Throughput:",flow_contents['throughput_info']['sender_throughput'], " bytes / second")
     print("---------------------------------------------------------------------------")
 
 if __name__ == "__main__":
