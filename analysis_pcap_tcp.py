@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime
 import dpkt
 import socket
 import struct
@@ -72,7 +72,7 @@ def run_analysis_pcap(in_file):
       # summarize packet information
       packet_info = {
         "packet_num": packet_number,
-        "time_stamp": str(datetime.datetime.utcfromtimestamp(timeStamp)),
+        "time_stamp": str(datetime.utcfromtimestamp(timeStamp)),
         "src_ip": source_ip,
         "dst_ip": dest_ip,
         "src_port": source_port,
@@ -152,14 +152,21 @@ def run_analysis_pcap(in_file):
     done_two_trans = False # if done processing two transactions
     # print("First two transactions after the TCP connection setup:\n")
 
-    # flow level statistics
+    # (sender throughput) statistics
     sender_tcp_bytes_total = 0
+    sender_start_time = None
+    sender_end_time = None
 
     for p in content['packets']:
       # part 1 c computation
       if p['packet_direction'] == SENDER_TO_RECEIVER:
         # print("woooo ", p['packet_num'], "   ", p['tcp_header_and_payload_size'])
         sender_tcp_bytes_total += p['tcp_header_and_payload_size']
+        if sender_start_time is None:
+          sender_start_time = p['time_stamp']
+      # detect for last ack
+      if p['packet_direction'] == RECEIVER_TO_SENDER and p['flags']['ack_set']:
+        sender_end_time = p['time_stamp']
 
       # skip until tcp connection setup successful
       if syn_packet is None or syn_ack_packet is None or ack_packet is None:
@@ -197,12 +204,23 @@ def run_analysis_pcap(in_file):
         else:
           two_transactions.append(p)
     # end for loop over tcp packets
+    # print("the computed bytes for flow is ", sender_tcp_bytes_total)
+    sender_start_time = datetime.strptime(sender_start_time, "%Y-%m-%d %H:%M:%S.%f")
+    sender_end_time = datetime.strptime(sender_end_time, "%Y-%m-%d %H:%M:%S.%f")
+    
+    diff_time = (sender_end_time - sender_start_time).total_seconds()
+    # print("The time difference is ",diff_time)
+    flow_level_information[unique_flow]['throughput'] = sender_tcp_bytes_total / diff_time
+
   print("=======================================================================")
   for flow_key, flow_contents in flow_level_information.items():
     print(flow_contents['four_tuple'])
     print("\nFirst Two Transactions After TCP Connection Setup:\n")
     for t in flow_contents['two_trans']:
       print(t)
+    print()
+    print("Sender Throughput:",end=" ")
+    print(flow_contents['throughput'], "bytes/second")
     print("---------------------------------------------------------------------------")
 
 if __name__ == "__main__":
