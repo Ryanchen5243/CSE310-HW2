@@ -67,6 +67,7 @@ def run_analysis_pcap(in_file):
       # buffer_size = len(buffer)
       # network_layer_header_size = dpkt.ip.IP_HDR_LEN
       packet_data_size = len(tcp.data)
+      tcp_header_and_payload_size = len(tcp)
       
       # summarize packet information
       packet_info = {
@@ -86,7 +87,8 @@ def run_analysis_pcap(in_file):
         "window_size": tcp.win, # window
         "payload_size": packet_data_size,
         "packet_direction": packet_direction,
-        "options": {}
+        "options": {},
+        "tcp_header_and_payload_size": tcp_header_and_payload_size
       }
 
       # add packet info to corresponding tcpflow
@@ -120,29 +122,45 @@ def run_analysis_pcap(in_file):
           tcp_flows[tcp_endpoint]['meta_data']['sender_to_receiver_window_scale'] = window_scale
     # end pcap packet iteration
 
-  # Display
+  # part 1a/b - Display flow info and first two transactions after tcp connection setup (seq num, ack num, receive window size)
+  # part 1c - sender throughput
+  '''
+  (c) The sender throughput. The throughput is the total amount of data sent over time (measured
+  in bytes/sec). The time period is the time between sending the first byte to receiving the last
+  acknowledgement. For throughput, only consider the packets at the TCP level (including the
+  header). You can ignore all other headers and acks.
+  '''
+
   print("\nTotal Number of TCP Flows Detected: ", len(tcp_flows),"\n")
-  total_num_packets = 0
+
+
+  # map {flow -> {4 tuple -> tuple, 2 transactions -> [], sender throughput -> {}}}
+  flow_level_information = {}
   for unique_flow,content in tcp_flows.items():
+    # print("the unique flow is ",unique_flow, type(unique_flow))
+    flow_level_information[unique_flow] = {}
     # general flow information
-    print("Flow: Source IP ({}), Source Port ({}), Destination IP ({}), Destination Port ({})".format(
+    flow_identifier_str = "Flow: Source IP ({}), Source Port ({}), Destination IP ({}), Destination Port ({})".format(
       content['packets'][0]["src_ip"],content['packets'][0]["src_port"],
       content['packets'][0]["dst_ip"],content['packets'][0]["dst_port"])
-    )
+    flow_level_information[unique_flow]['four_tuple'] = flow_identifier_str
     
-    '''
-    (b) For the first two transaction after the TCP connection is set up (from sender to receiver), the
-    values of the Sequence number, Ack number, and Receive Window size. In the figure below, the
-    first two transactions are marked in orange. If there is a packet loss, this illustration should still
-    work. If the last ACK in the three-way handshake is piggy-backed with the first packet (in orange),
-    then you should still start with this piggy-backed packet.
-    '''
     syn_packet = None 
     syn_ack_packet = None 
     ack_packet = None 
     two_transactions = [] # stores two packets after tcp connection
-    print("First two transactions after the TCP connection setup:\n")
+    done_two_trans = False # if done processing two transactions
+    # print("First two transactions after the TCP connection setup:\n")
+
+    # flow level statistics
+    sender_tcp_bytes_total = 0
+
     for p in content['packets']:
+      # part 1 c computation
+      if p['packet_direction'] == SENDER_TO_RECEIVER:
+        # print("woooo ", p['packet_num'], "   ", p['tcp_header_and_payload_size'])
+        sender_tcp_bytes_total += p['tcp_header_and_payload_size']
+
       # skip until tcp connection setup successful
       if syn_packet is None or syn_ack_packet is None or ack_packet is None:
         if p['flags']['syn_set'] and p['flags']['ack_set']:
@@ -155,37 +173,37 @@ def run_analysis_pcap(in_file):
           ack_packet = p
           # check for piggy backed data
           if (p['payload_size'] > 0):
-            two_transactions.append(p) # break
-          else:
-            continue
+            two_transactions.append(p)
+          continue
+      
+      # print("successful process of tcp connection at ", p['packet_num'])
       # tcp connection setup successful
-      # print("tcp connection successful")
-      # print("SYN: {}\n SYN-ACK: {}\n ACK: {}\n".format(syn_packet['packet_num'],syn_ack_packet['packet_num'],ack_packet['packet_num']))
-
-      if (len(two_transactions) >= 2):
-        break
-
-      # fetch first transactions after tcp
-      # print("the packet in consideration is ", p['packet_num'])
-      two_transactions.append(p)
+      if not done_two_trans:
+        if len(two_transactions) >= 2:
+          done_two_trans = True 
+          flow_level_information[unique_flow]['two_trans'] = []
+          for trans in two_transactions:
+            # compute calculated window size
+            ws = None # store window scale tcp option
+            if trans['packet_direction'] == SENDER_TO_RECEIVER:
+              ws = content['meta_data']['sender_to_receiver_window_scale']
+            else:
+              ws = content['meta_data']['receiver_to_sender_window_scale']
+            calculated_window_size = trans['window_size'] * (2 ** ws)
+            # display details
+            flow_level_information[unique_flow]['two_trans'].append("Packet No: {}\nSequence number: {} Ack number: {} Receive Window size: {}".format(
+              trans['packet_num'], trans['seq_num'], trans['ack_num'], calculated_window_size,'\n')
+            )
+        else:
+          two_transactions.append(p)
     # end for loop over tcp packets
-
-    # display two packets
-    for p in two_transactions:
-      # compute calculated window size
-      ws = None # store window scale tcp option
-      if p['packet_direction'] == SENDER_TO_RECEIVER:
-        ws = content['meta_data']['sender_to_receiver_window_scale']
-      else:
-        ws = content['meta_data']['receiver_to_sender_window_scale']
-      calculated_window_size = p['window_size'] * (2 ** ws)
-      # display details
-      print("Packet No: {}\nSequence number: {} Ack number: {} Receive Window size: {}".format(
-        p['packet_num'], p['seq_num'], p['ack_num'], calculated_window_size,'\n'
-      ))
-
-    print("-------------------------------------------------------------------------------")
-
+  print("=======================================================================")
+  for flow_key, flow_contents in flow_level_information.items():
+    print(flow_contents['four_tuple'])
+    print("\nFirst Two Transactions After TCP Connection Setup:\n")
+    for t in flow_contents['two_trans']:
+      print(t)
+    print("---------------------------------------------------------------------------")
 
 if __name__ == "__main__":
   run_analysis_pcap(r'assignment2.pcap')
