@@ -105,7 +105,7 @@ def run_analysis_pcap(in_file):
       
       tcp_flows[tcp_endpoint]['packets'].append(packet_info)
 
-      # update meta data with window scale
+      # update meta data with window scale (fetch from syn and syn ack packets)
       if packet_info['flags']['syn_set']:
         window_scale = None
         # print("Packet ",str(packet_number), " window scale option detected? ", dpkt.tcp.TCP_OPT_WSCALE in dict(dpkt.tcp.parse_opts(tcp.opts)))
@@ -116,75 +116,76 @@ def run_analysis_pcap(in_file):
 
         if packet_info['flags']['ack_set']: # syn ack -> update receiver to sender window scale
           tcp_flows[tcp_endpoint]['meta_data']['receiver_to_sender_window_scale'] = window_scale
-        else: # # syn only -> update update sender to receiver window scale 
+        else: # syn only -> update update sender to receiver window scale 
           tcp_flows[tcp_endpoint]['meta_data']['sender_to_receiver_window_scale'] = window_scale
-
     # end pcap packet iteration
-    
-    total_num_packets = 0
-    for unique_flow,content in tcp_flows.items():
-      print("The flow is ",unique_flow)
-      i = 0
-      print("Meta Data")
-      print(content['meta_data'])
-      print('\n')
-      print("some packets here are ")
-      # i = 0
-      for p in content['packets']:
-        # if i ==15:
-        #   break 
-        # i+=1 
-        total_num_packets+=1
 
-
-
-'''
   # Display
-  print("\nTotal Number of TCP Flows: ", len(tcp_flows),"\n")
-  print("------------------------------------------------------------------------------------")
-  for tcp_flow,packets in tcp_flows.items():
-    print("TCP Flow: ")
-    # Display (source port, source IP address, destination port, destination IP address)
-    first_packet_in_flow = packets[0]
-    print("Source IP Address: {}\nSource Port: {}\nDestination IP Address: {}\nDestination Port: {}".format(
-      first_packet_in_flow['src_ip'], first_packet_in_flow['src_port'], first_packet_in_flow['dst_ip'],first_packet_in_flow['dst_port']
-    ))
-    print()
-    # first two transactions after connection setup, sequence number, ack number, and receive window size
+  print("\nTotal Number of TCP Flows Detected: ", len(tcp_flows),"\n")
+  total_num_packets = 0
+  for unique_flow,content in tcp_flows.items():
+    # general flow information
+    print("Flow: Source IP ({}), Source Port ({}), Destination IP ({}), Destination Port ({})".format(
+      content['packets'][0]["src_ip"],content['packets'][0]["src_port"],
+      content['packets'][0]["dst_ip"],content['packets'][0]["dst_port"])
+    )
+    
+    '''
+    (b) For the first two transaction after the TCP connection is set up (from sender to receiver), the
+    values of the Sequence number, Ack number, and Receive Window size. In the figure below, the
+    first two transactions are marked in orange. If there is a packet loss, this illustration should still
+    work. If the last ACK in the three-way handshake is piggy-backed with the first packet (in orange),
+    then you should still start with this piggy-backed packet.
+    '''
     syn_packet = None 
     syn_ack_packet = None 
     ack_packet = None 
-    num_transactions_after_setup = 0
-    print("After TCP Handshake... Sender packets are as follows")
-    for p in packets:
+    two_transactions = [] # stores two packets after tcp connection
+    print("First two transactions after the TCP connection setup:\n")
+    for p in content['packets']:
       # skip until tcp connection setup successful
       if syn_packet is None or syn_ack_packet is None or ack_packet is None:
         if p['flags']['syn_set'] and p['flags']['ack_set']:
-          syn_ack_packet = p 
+          syn_ack_packet = p
+          continue
         elif p['flags']['syn_set']:
           syn_packet = p 
+          continue
         elif p['flags']['ack_set']:
           ack_packet = p
           # check for piggy backed data
           if (p['payload_size'] > 0):
-            print("Packet No: {}\nSequence number: {} Ack number: {} Receive Window size: {}".format(
-              p['packet_num'], p['seq_num'], p['ack_num'], p['window_size']
-            ))
-            num_transactions_after_setup += 1
-        continue
+            two_transactions.append(p) # break
+          else:
+            continue
       # tcp connection setup successful
-      # Sequence number, Ack number, and Receive Window size.
-      if num_transactions_after_setup == 2:
-        break
-      print("Packet No: {}\nSequence number: {} Ack number: {} Receive Window size: {}".format(
-        p['packet_num'], p['seq_num'], p['ack_num'], p['window_size']
-      ))
-      num_transactions_after_setup += 1
+      # print("tcp connection successful")
+      # print("SYN: {}\n SYN-ACK: {}\n ACK: {}\n".format(syn_packet['packet_num'],syn_ack_packet['packet_num'],ack_packet['packet_num']))
 
-    if (syn_packet is None or syn_ack_packet is None or ack_packet is None):
-      print("An error occured detecting tcp handshake")
-    print("\n------------------------------------------------------------------------------------\n")
-'''
+      if (len(two_transactions) >= 2):
+        break
+
+      # fetch first transactions after tcp
+      # print("the packet in consideration is ", p['packet_num'])
+      two_transactions.append(p)
+    # end for loop over tcp packets
+
+    # display two packets
+    for p in two_transactions:
+      # compute calculated window size
+      ws = None # store window scale tcp option
+      if p['packet_direction'] == SENDER_TO_RECEIVER:
+        ws = content['meta_data']['sender_to_receiver_window_scale']
+      else:
+        ws = content['meta_data']['receiver_to_sender_window_scale']
+      calculated_window_size = p['window_size'] * (2 ** ws)
+      # display details
+      print("Packet No: {}\nSequence number: {} Ack number: {} Receive Window size: {}".format(
+        p['packet_num'], p['seq_num'], p['ack_num'], calculated_window_size,'\n'
+      ))
+
+    print("-------------------------------------------------------------------------------")
+
 
 if __name__ == "__main__":
   run_analysis_pcap(r'assignment2.pcap')
