@@ -227,7 +227,70 @@ def run_analysis_pcap(in_file):
     print("Time Elapsed: ", flow_contents['throughput_info']['time_elapsed'], " seconds")
     print("Total Num Bytes: ", flow_contents['throughput_info']['total_num_bytes'], " bytes")
     print("Sender Throughput:",flow_contents['throughput_info']['sender_throughput'], " bytes / second")
+    # analysis for part b
+    run_congestion_control(tcp_flows,flow_key)
     print("---------------------------------------------------------------------------")
+
+def run_congestion_control(all_flows,flow_key):
+  print("\nThe first 3 congestion window sizes are as follows: \n")
+  syn_packet = None
+  syn_ack_packet = None
+
+  for packet in all_flows[flow_key]['packets']:
+    # print("Packet {}".format(packet['packet_num']))
+    # initialize syn and syn ack packets
+    if syn_packet is None or syn_ack_packet is None:
+      if packet['flags']['syn_set'] and packet['flags']['ack_set']:
+        syn_ack_packet = packet
+      elif packet['flags']['syn_set']:
+        syn_packet = packet
+      continue
+    # end while
+    break 
+  # end for
+  
+  # compute RTT
+  syn_time = datetime.strptime(syn_packet['time_stamp'], "%Y-%m-%d %H:%M:%S.%f")
+  syn_ack_time = datetime.strptime(syn_ack_packet['time_stamp'], "%Y-%m-%d %H:%M:%S.%f")
+  estimated_RTT = (syn_ack_time - syn_time).total_seconds()
+  # print("estimated rtt.. ",str(estimated_RTT))
+
+  lower_congestion_window_time = None
+  upper_congestion_window_time = None
+  transmission_round_number = 0
+  window_packets = []
+
+  for packet in all_flows[flow_key]['packets']:
+    if (packet['flags']['syn_set'] and packet['flags']['ack_set']) or packet['flags']['syn_set']:
+      # print("Skipping.. ", packet['packet_num'])
+      continue 
+    # end if (skipping syn and syn-ack)
+
+    # fetch sender initial ack time
+    if lower_congestion_window_time is None:
+      lower_congestion_window_time = datetime.strptime(packet['time_stamp'], "%Y-%m-%d %H:%M:%S.%f")
+
+    if packet['packet_direction'] == "sender_to_receiver":
+      # print("packet ",packet['packet_num'], "is sender to receiver ")
+
+      upper_congestion_window_time = datetime.strptime(packet['time_stamp'], "%Y-%m-%d %H:%M:%S.%f")
+      packet_within_RTT = (upper_congestion_window_time - lower_congestion_window_time).total_seconds() <= estimated_RTT
+      
+      if packet_within_RTT:
+        window_packets.append(packet)
+      else:
+        # display window packets
+        print("Transmission Round {} - Congestion Window Size = {}".format(transmission_round_number,len(window_packets)))
+        
+        for p in window_packets:
+          print(p['packet_num'],end=",")
+        print()
+
+        transmission_round_number += 1 # next RTT
+        if transmission_round_number == 3:
+          break 
+        lower_congestion_window_time = upper_congestion_window_time
+        window_packets = [packet]
 
 if __name__ == "__main__":
   run_analysis_pcap(r'assignment2.pcap')
